@@ -1,126 +1,135 @@
-import os
 import json
+import os
 import requests
 from bs4 import BeautifulSoup
+import urllib3
 
-# RSAHC / RPMC की आधिकारिक वेबसाइट के लिंक्स जहाँ अपडेट्स आते हैं
-TARGET_URLS = [
-    "https://rsahc.rajasthan.gov.in/",
-    # यदि कोई अन्य मुख्य पेज या नोटिस पेज हो, तो उसे यहाँ जोड़ा जा सकता है
-]
-LAST_DATA_FILE = "last_seen.json"
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+# आपका पैरामेडिकल बोट टोकन और चैनल
+TELEGRAM_BOT_TOKEN = "8008140727:AAGMciDDyPzuvFzWhKXNqmrfTYLdnIRnfOI"
+CHANNEL_USERNAME = "@ParamedixClasses"
 
-def send_telegram_media(file_url, caption):
-    if not BOT_TOKEN or not CHAT_ID:
-        return
-    
-    file_lower = file_url.lower()
-    
-    # चेक करेंगे कि फाइल PDF है या इमेज
-    if file_lower.endswith(".pdf"):
-        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-        payload = {
-            "chat_id": CHAT_ID,
-            "document": file_url,
-            "caption": caption,
-            "parse_mode": "HTML"
-        }
-    elif any(file_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        payload = {
-            "chat_id": CHAT_ID,
-            "photo": file_url,
-            "caption": caption,
-            "parse_mode": "HTML"
-        }
-    else:
-        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": f"{caption}\n\n🔗 <b>लिंक:</b> {file_url}",
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }
+TARGET_URL = "https://result.rpcraj.net/"
+HISTORY_FILE = "last_seen_rpmc.json"
 
+
+def load_history():
+  if os.path.exists(HISTORY_FILE):
     try:
-        requests.post(api_url, json=payload, timeout=20)
-    except Exception as e:
-        print("Error sending media:", e)
+      with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        if isinstance(data, list):
+          return [
+              item
+              for item in data
+              if isinstance(item, dict) and "title" in item
+          ]
+    except Exception:
+      pass
+  return []
 
-def fetch_all_updates():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    all_updates = []
-    seen_links = set()
-    skip_texts = ["home", "skip to main", "screen reader", "sitemap", "login", "contact us"]
 
-    for url in TARGET_URLS:
-        try:
-            res = requests.get(url, headers=headers, timeout=20)
-            if res.status_code != 200:
-                continue
-            soup = BeautifulSoup(res.text, "html.parser")
-            for element in soup(["header", "footer", "nav", "script", "style"]):
-                element.decompose()
+def save_history(history_list):
+  try:
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+      json.dump(history_list, f, ensure_ascii=False, indent=4)
+  except Exception as e:
+    print(f"Error saving history: {e}")
 
-            for a_tag in soup.find_all("a", href=True):
-                title = " ".join(a_tag.get_text(strip=True).split())
-                link = a_tag["href"].strip()
 
-                if not title or len(title) < 8:
-                    continue
-                if any(word in title.lower() for word in skip_texts):
-                    continue
-                if link.startswith("#") or link.startswith("javascript:") or link.startswith("mailto:"):
-                    continue
+def send_telegram_alert(title, link):
+  try:
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
 
-                # डोमेन के हिसाब से पूरा URL बनाएं
-                if link.startswith("http"):
-                    full_url = link
-                else:
-                    full_url = f"https://rsahc.rajasthan.gov.in/{link.lstrip('/')}"
-                
-                if full_url not in seen_links:
-                    seen_links.add(full_url)
-                    all_updates.append({"title": title, "url": full_url})
-        except Exception as e:
-            print(f"Error: {e}")
-    return all_updates
+    # शॉर्ट, आकर्षक कैप्शन और आपकी बताई हुई विज्ञापन लाइन
+    message = (
+        f"🚨 **RPMC / RSAHC NEW RESULT DECLARED!** 🩺\n\n"
+        f"📌 **{title}**\n\n"
+        f"🔗 **रिजल्ट चेक करने के लिए क्लिक करें:**\n{link}\n\n"
+        "──────────────────────────\n"
+        f"✅ Join : {CHANNEL_USERNAME}"
+    )
 
-def main():
-    last_seen = []
-    if os.path.exists(LAST_DATA_FILE):
-        with open(LAST_DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                last_seen = json.load(f)
-            except:
-                last_seen = []
+    if ".pdf" in link.lower():
+      payload = {
+          "chat_id": CHANNEL_USERNAME,
+          "document": link,
+          "caption": message,
+          "parse_mode": "Markdown",
+      }
+      requests.post(api_url + "sendDocument", data=payload, timeout=15)
+    else:
+      payload = {
+          "chat_id": CHANNEL_USERNAME,
+          "text": message,
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": False,
+      }
+      requests.post(api_url + "sendMessage", data=payload, timeout=15)
+  except Exception as e:
+    print(f"Telegram send error: {e}")
 
-    current_updates = fetch_all_updates()
-    new_items = [item for item in current_updates if item["url"] not in last_seen]
 
-    for item in current_updates:
-        if item["url"] not in last_seen:
-            last_seen.append(item["url"])
+def scrape_rpmc():
+  seen_items = load_history()
+  seen_titles = {
+      item.get("title") for item in seen_items if isinstance(item, dict)
+  }
 
-    if new_items:
-        for item in new_items[:5]:
-            
-            # आपकी डिमांड के अनुसार कैप्शन बोल्ड में और आपका चैनल विज्ञापन
-            caption = (
-                f"<b>🚨 RSAHC / RPMC OFFICIAL UPDATE 🚨</b>\n\n"
-                f"<b>📌 विषय: {item['title']}</b>\n\n"
-                f"<b>✅ Join : @ParamedixClasses</b>"
-            )
-            
-            send_telegram_media(item['url'], caption)
+  headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      )
+  }
 
-        with open(LAST_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(last_seen[-300:], f, ensure_ascii=False, indent=2)
+  new_found = []
+
+  try:
+    response = requests.get(TARGET_URL, headers=headers, timeout=20, verify=False)
+    if response.status_code == 200:
+      soup = BeautifulSoup(response.text, "html.parser")
+
+      # 1. वेबसाइट के सभी लिंक्स और रिजल्ट पेजों को स्कैन करना
+      for a in soup.find_all("a", href=True):
+        title = a.get_text(strip=True)
+        href = a["href"]
+
+        if len(title) > 4:
+          if href.startswith("http"):
+            full_url = href
+          elif href.startswith("/"):
+            full_url = "https://result.rpcraj.net" + href
+          else:
+            full_url = TARGET_URL + href
+
+          if title not in seen_titles:
+            new_found.append({"title": title, "url": full_url})
+            seen_titles.add(title)
+
+      # 2. रिजल्ट टेबल्स को स्कैन करना
+      for tr in soup.find_all("tr"):
+        cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+        row_text = " - ".join([c for c in cols if c])
+        if len(row_text) > 8:
+          if row_text not in seen_titles:
+            new_found.append({"title": row_text, "url": TARGET_URL})
+            seen_titles.add(row_text)
+
+  except Exception as e:
+    print(f"Error scraping RPMC portal: {e}")
+
+  if new_found:
+    updated_history = new_found + seen_items
+    save_history(updated_history[:150])
+
+    for item in reversed(new_found):
+      send_telegram_alert(item["title"], item["url"])
+      print(f"Posted: {item['title']}")
+  else:
+    print("No new updates found.")
+
 
 if __name__ == "__main__":
-    main()
+  scrape_rpmc()
