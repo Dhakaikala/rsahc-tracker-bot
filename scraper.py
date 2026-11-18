@@ -29,7 +29,7 @@ def load_history():
           ]
     except Exception:
       pass
-  return None  # None का मतलब पहली बार रन हो रहा है
+  return None
 
 
 def save_history(history_list):
@@ -46,7 +46,6 @@ def send_telegram_alert(title, link):
     safe_title = html.escape(title)
     safe_link = html.escape(link)
 
-    # शॉर्ट, आकर्षक और बोल्ड कैप्शन + आपकी फिक्स लाइन
     message = (
         f"🚨 <b>RSAHC / RPMC NEW RESULT DECLARED!</b> 🎓\n\n"
         f"📌 <b>{safe_title}</b>\n\n"
@@ -93,7 +92,6 @@ def scrape_paramedical():
   }
 
   current_found = []
-  # वेबसाइट के स्टैटिक हेडर/फुटर शब्दों को इग्नोर करने के लिए
   ignore_words = [
       "constituted by government of rajasthan",
       "rajasthan state allied and healthcare council",
@@ -108,7 +106,7 @@ def scrape_paramedical():
     if response.status_code == 200:
       soup = BeautifulSoup(response.text, "html.parser")
 
-      # 1. किसी भी टेबल की हर रो (Row) को बिना शर्त उठाना
+      # 1. किसी भी टेबल की हर रो (Row) को स्कैन करना
       for table in soup.find_all("table"):
         for tr in table.find_all("tr"):
           cols = [
@@ -128,7 +126,7 @@ def scrape_paramedical():
                 current_found.append({"title": row_text, "url": item_url})
                 seen_titles.add(row_text)
 
-      # 2. सभी लिंक्स (<a>) को स्कैन करना (चाहे PDF हो या वेबपेज लिंक)
+      # 2. सभी लिंक्स (<a>) को स्कैन करना
       for a in soup.find_all("a", href=True):
         title = " ".join(a.get_text(strip=True).split())
         href = a["href"].strip()
@@ -144,7 +142,7 @@ def scrape_paramedical():
               current_found.append({"title": title, "url": full_url})
               seen_titles.add(title)
 
-      # 3. लिस्ट (<li>) या अन्य टेक्स्ट ब्लॉक में छपे रिजल्ट्स को भी पकड़ना
+      # 3. लिस्ट (<li>) या पैराग्राफ (<p>) में छपे रिजल्ट्स को भी पकड़ना
       for tag in soup.find_all(["li", "p"]):
         title = " ".join(tag.get_text(strip=True).split())
         if len(title) > 15 and title.lower() not in ignore_words:
@@ -162,8 +160,16 @@ def scrape_paramedical():
     print(f"Error scraping Paramedical site: {e}")
 
   if is_first_run:
+    # पहली बार चलने पर पुराने रिजल्ट्स सेव कर लें, लेकिन आज (18-11-2026) वाले पोस्ट कर दें
     save_history(HISTORY_FILE, current_found[:1000])
-    print("First run baseline saved. No old data posted.")
+    todays_results = [
+        item
+        for item in current_found
+        if "18-11-2026" in item["title"] or "18/11/2026" in item["title"]
+    ]
+    for item in reversed(todays_results):
+      send_telegram_alert(item["title"], item["url"])
+      print(f"Posted today's result: {item['title']}")
   else:
     if current_found:
       really_new = [
