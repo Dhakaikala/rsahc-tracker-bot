@@ -17,25 +17,36 @@ HISTORY_FILE = "last_seen.json"
 
 
 def load_history():
+  default_state = {
+      "items": [],
+      "forced_18_11_2026_done": False,
+      "is_initialized": False,
+  }
   if os.path.exists(HISTORY_FILE):
     try:
       with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        if isinstance(data, list):
-          return [
-              item
-              for item in data
-              if isinstance(item, dict) and "title" in item
-          ]
+        if isinstance(data, dict):
+          return {
+              "items": data.get("items", []) if isinstance(data.get("items"), list) else [],
+              "forced_18_11_2026_done": bool(data.get("forced_18_11_2026_done", False)),
+              "is_initialized": bool(data.get("is_initialized", True)),
+          }
+        elif isinstance(data, list):
+          return {
+              "items": data,
+              "forced_18_11_2026_done": False,
+              "is_initialized": True,
+          }
     except Exception:
       pass
-  return None
+  return default_state
 
 
-def save_history(history_list):
+def save_history(state):
   try:
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-      json.dump(history_list, f, ensure_ascii=False, indent=4)
+      json.dump(state, f, ensure_ascii=False, indent=4)
   except Exception as e:
     print(f"Error saving history: {e}")
 
@@ -72,16 +83,21 @@ def send_telegram_alert(title, link):
 
     if res.status_code != 200:
       print(f"Telegram API Error: {res.text}")
+    else:
+      print(f"Sent to {CHANNEL_USERNAME}: {title}")
   except Exception as e:
     print(f"Telegram send error: {e}")
 
 
+def is_18_nov_2026(text):
+  return "18/11/2026" in text or "18-11-2026" in text
+
+
 def scrape_paramedical():
-  existing_history = load_history()
-  is_first_run = existing_history is None
-  seen_items = existing_history if existing_history else []
+  state = load_history()
+  seen_items = state["items"]
   seen_titles = {
-      item.get("title") for item in seen_items if isinstance(item, dict)
+      item.get("title") for item in seen_items if isinstance(item, dict) and "title" in item
   }
 
   headers = {
@@ -92,12 +108,12 @@ def scrape_paramedical():
   }
 
   current_found = []
-  ignore_words = [
+  ignore_words = {
       "constituted by government of rajasthan",
       "rajasthan state allied and healthcare council",
       "results",
       "council",
-  ]
+  }
 
   try:
     response = requests.get(
@@ -115,16 +131,15 @@ def scrape_paramedical():
           ]
           if len(cols) >= 1:
             row_text = " | ".join([c for c in cols if c])
-            if len(row_text) > 10 and row_text not in seen_titles:
-              if row_text.lower() not in ignore_words:
-                a_tag = tr.find("a", href=True)
-                item_url = (
-                    urljoin(TARGET_URL, a_tag["href"])
-                    if (a_tag and a_tag.get("href"))
-                    else TARGET_URL
-                )
+            if len(row_text) > 10 and row_text.lower() not in ignore_words:
+              a_tag = tr.find("a", href=True)
+              item_url = (
+                  urljoin(TARGET_URL, a_tag["href"])
+                  if (a_tag and a_tag.get("href"))
+                  else TARGET_URL
+              )
+              if row_text not in {x["title"] for x in current_found}:
                 current_found.append({"title": row_text, "url": item_url})
-                seen_titles.add(row_text)
 
       # 2. सभी लिंक्स (<a>) को स्कैन करना
       for a in soup.find_all("a", href=True):
@@ -135,12 +150,11 @@ def scrape_paramedical():
             len(title) > 10
             and not href.startswith("javascript:")
             and not href.startswith("#")
+            and title.lower() not in ignore_words
         ):
-          if title.lower() not in ignore_words:
-            full_url = urljoin(TARGET_URL, href)
-            if title not in seen_titles:
-              current_found.append({"title": title, "url": full_url})
-              seen_titles.add(title)
+          full_url = urljoin(TARGET_URL, href)
+          if title not in {x["title"] for x in current_found}:
+            current_found.append({"title": title, "url": full_url})
 
       # 3. लिस्ट (<li>) या पैराग्राफ (<p>) में छपे रिजल्ट्स को भी पकड़ना
       for tag in soup.find_all(["li", "p"]):
@@ -152,43 +166,65 @@ def scrape_paramedical():
               if (a_tag and a_tag.get("href"))
               else TARGET_URL
           )
-          if title not in seen_titles:
+          if title not in {x["title"] for x in current_found}:
             current_found.append({"title": title, "url": item_url})
-            seen_titles.add(title)
 
   except Exception as e:
     print(f"Error scraping Paramedical site: {e}")
 
-  if is_first_run:
-    # पहली बार चलने पर पुराने रिजल्ट्स सेव कर लें, लेकिन आज (18-11-2026) वाले पोस्ट कर दें
-    save_history(HISTORY_FILE, current_found[:1000])
-    todays_results = [
-        item
-        for item in current_found
-        if "18-11-2026" in item["title"] or "18/11/2026" in item["title"]
+  if not state["is_initialized"]:
+    # पहली बार बेसलाइन सेव करें, लेकिन 18/11/2026 वाले रिजल्ट्स तुरंत भेज दें
+    state["items"] = current_found[:1000]
+    state["is_initialized"] = True
+
+    nov_18_items = [
+        item for item in current_found if is_18_nov_2026(item["title"])
     ]
-    for item in reversed(todays_results):
+    for item in reversed(nov_18_items):
       send_telegram_alert(item["title"], item["url"])
-      print(f"Posted today's result: {item['title']}")
+
+    state["forced_18_11_2026_done"] = True
+    save_history(state)
+    print("First run completed. Sent 18/11/2026 results if available.")
+    return
+
+  to_post = []
+
+  # अगर 18/11/2026 वाले रिजल्ट्स अभी तक फोर्स-पोस्ट नहीं हुए हैं, तो उन्हें भी भेजें
+  if not state["forced_18_11_2026_done"]:
+    nov_18_items = [
+        item for item in current_found if is_18_nov_2026(item["title"])
+    ]
+    for item in reversed(nov_18_items):
+      to_post.append(item)
+    state["forced_18_11_2026_done"] = True
+
+  # बाकी एकदम नए आइटम्स (जो पहले नहीं देखे गए)
+  really_new = [
+      item for item in current_found if item["title"] not in seen_titles
+  ]
+  for item in reversed(really_new):
+    if item["title"] not in {x["title"] for x in to_post}:
+      to_post.append(item)
+
+  if to_post:
+    for item in to_post:
+      send_telegram_alert(item["title"], item["url"])
+
+    merged = really_new + seen_items
+    # डुप्लिकेट हटाते हुए लेटेस्ट हिस्ट्री सेव करें
+    unique_items = []
+    used = set()
+    for item in merged:
+      t = item.get("title")
+      if t and t not in used:
+        unique_items.append(item)
+        used.add(t)
+
+    state["items"] = unique_items[:1000]
+    save_history(state)
   else:
-    if current_found:
-      really_new = [
-          item
-          for item in current_found
-          if item["title"] not in {i.get("title") for i in seen_items}
-      ]
-
-      if really_new:
-        updated_history = really_new + seen_items
-        save_history(HISTORY_FILE, updated_history[:1000])
-
-        for item in reversed(really_new):
-          send_telegram_alert(item["title"], item["url"])
-          print(f"Posted: {item['title']}")
-      else:
-        print("No new updates found.")
-    else:
-      print("No updates found.")
+    print("No new updates found.")
 
 
 if __name__ == "__main__":
