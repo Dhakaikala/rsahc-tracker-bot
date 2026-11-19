@@ -2,32 +2,35 @@ name: Paramedical Result Scraper
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # हर 5 मिनट में ऑटोमैटिक चलेगा
-  workflow_dispatch:      # आप मैन्युअल रूप से 'Run workflow' बटन से भी चला सकते हैं
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install Dependencies
-      run: |
-        pip install requests beautifulsoup4
+      - name: Install Dependencies
+        run: |
+          pip install requests beautifulsoup4 urllib3
 
-    - name: Run Scraper
-      run: |
-        python scraper.py
+      - name: Run Scraper
+        run: |
+          python scraper.py
 
-    - name: Save Updated History
-      uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        commit_message: "Auto-update scraped results history [skip ci]"
-        branch: main
+      - name: Save Updated History
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update scraped results history [skip ci]"
+          branch: main
