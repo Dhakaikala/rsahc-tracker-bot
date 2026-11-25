@@ -63,12 +63,23 @@ PARAMEDICAL_SOURCES = [
     },
 ]
 
-HEADERS = {
+BASE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-IN,en-US;q=0.9,hi-IN;q=0.8,hi;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
@@ -288,12 +299,18 @@ def is_allowed_domain_or_file(url_str, title_str, kind):
   return False
 
 
-def extract_items_from_page(source_name, page_url):
+def fetch_with_session(session, page_url):
+  parsed = urlparse(page_url)
+  origin = f"{parsed.scheme}://{parsed.netloc}/"
+  headers = dict(BASE_HEADERS)
+  headers["Referer"] = origin
+  return session.get(clean_url(page_url), headers=headers, timeout=25, verify=False)
+
+
+def extract_items_from_page(session, source_name, page_url):
   items = []
   try:
-    resp = requests.get(
-        clean_url(page_url), headers=HEADERS, timeout=25, verify=False
-    )
+    resp = fetch_with_session(session, page_url)
     if resp.status_code != 200:
       print(f"[{source_name}] HTTP {resp.status_code} for {page_url}")
       return items
@@ -404,11 +421,9 @@ def build_caption(item):
   return caption[:1024]
 
 
-def download_binary(url_str):
+def download_binary(session, url_str):
   try:
-    r = requests.get(
-        clean_url(url_str), headers=HEADERS, timeout=35, verify=False
-    )
+    r = fetch_with_session(session, url_str)
     if r.status_code == 200 and r.content and len(r.content) > 150:
       ct = r.headers.get("Content-Type", "")
       return r.content, ct
@@ -417,7 +432,7 @@ def download_binary(url_str):
   return None, ""
 
 
-def send_telegram_item(item):
+def send_telegram_item(session, item):
   if not TELEGRAM_BOT_TOKEN:
     print("Missing BOT_TOKEN.")
     return False
@@ -428,7 +443,7 @@ def send_telegram_item(item):
   api_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
   if kind in ("image", "document") and url:
-    content, ct = download_binary(url)
+    content, ct = download_binary(session, url)
     real_kind = classify_file_type(url, ct)
     if content:
       parsed_name = urlparse(url).path.split("/")[-1] or (
@@ -490,10 +505,11 @@ def main():
   seen_ids = set(state.get("seen_ids", []))
   seen_urls = set(canonical_url(x) for x in state.get("seen_urls", []) if x)
 
+  session = requests.Session()
   collected = []
   for src in PARAMEDICAL_SOURCES:
-    collected.extend(extract_items_from_page(src["name"], src["url"]))
-    time.sleep(0.6)
+    collected.extend(extract_items_from_page(session, src["name"], src["url"]))
+    time.sleep(0.8)
 
   if seed_only:
     seeded = 0
@@ -531,7 +547,7 @@ def main():
 
   posted = 0
   for it in new_items:
-    if send_telegram_item(it):
+    if send_telegram_item(session, it):
       seen_ids.add(it["id"])
       if it.get("canonical_url"):
         seen_urls.add(it["canonical_url"])
